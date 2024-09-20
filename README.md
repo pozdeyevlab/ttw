@@ -1,7 +1,8 @@
 # ttw
 Computational analysis of nodules which display taller-than-wide (ttw) dimensions. This feature is hypothesized to be a predictor of malignancy
 
-# Use
+# Usage
+Deidentified data has been provided as part of this repository, to replicate the analysis follow the steps below. 
 ```bash
 git clone https://github.com/pozdeyevlab/ttw.git
 cd ttw
