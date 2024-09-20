@@ -1,0 +1,402 @@
+---
+title: "taller_than_wider"
+output: html_document
+date: "`r Sys.Date()`"
+params:
+    input: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+if (!requireNamespace("readxl", quietly = TRUE))
+  install.packages("readxl")
+if (!requireNamespace("caret", quietly = TRUE))
+  install.packages("caret")
+if (!requireNamespace("data.table", quietly = TRUE))
+  install.packages("pracma")
+if (!requireNamespace("pracma", quietly = TRUE))
+  install.packages("pROC")
+if (!requireNamespace("yardstick", quietly = TRUE))
+  install.packages("yardstick")
+
+library(readxl)
+library(caret)
+library(data.table)
+library(pracma)
+library(pROC)
+library(yardstick)
+```
+
+```{r color, results='markup'}
+print(params$input)
+```
+## Taller-Than-Wide Analysis
+
+This markdown file replicates the analysis published in "Taller-than-wide sonographic feature poorly discriminates benign and malignant follicular and oncocytic thyroid neoplasms."
+
+Abbreviations:
+Follicular adenoma: FA
+Follicular thyroid cancer: FTC 
+Follicular variant papillary: FVP
+NIFTP: NIFT
+Oncocytic adenoma: OA
+Oncocytic thyroid cancer: OTC
+Hyperplastic nodule: HN
+Adenomatoid nodule: AN 
+Papillary thyroid cancer: PTC
+
+### Load and inspect data
+```{r}
+# Load data
+dat3 <- fread(params$input, sep='\t')
+
+# Summarize nodule dimensions
+dimentions <- dat3[, c("H_AP", "W_Transverse", "L_Longitudinal")]
+dims <- sort(as.numeric(dat3[1, c("H_AP", "W_Transverse", "L_Longitudinal")]))
+
+
+
+summary <- data.frame(cancer_type = character(9), 
+                      average_height = numeric(9),
+                      average_width = numeric(9),
+                      N_taller_than_wider = numeric(9),
+                      N_total = numeric(9),
+                      percent_taller_than_wider = numeric(9))
+
+counter = 1
+
+for (i in c("Follicular_adenoma", "Follicular_thyroid_cancer", "Follicular_variant_papillary",  "NIFTP",
+            "Oncocytic_adenoma", "Oncocytic_thyroid_cancer", "Hyperplastic_nodule", "Adenomatoid_nodule", 
+            "Papillary_thyroid_cancer")){
+  
+  subset <- dat3[dat3$Diagnosis == i,  ]  
+  
+  summary$cancer_type[counter] <- i
+  summary$average_height[counter] <- mean(as.numeric(subset$H_AP))
+  summary$average_width[counter] <- mean(as.numeric(subset$W_Transverse))
+  summary$N_taller_than_wider[counter] <- sum(subset$H_AP > subset$W_Transverse)
+  summary$N_total[counter] <- nrow(subset)
+  summary$percent_taller_than_wider[counter] <- summary$N_taller_than_wider[counter]/summary$N_total[counter] * 100
+  
+  counter = counter + 1
+  
+}
+
+print(summary)
+```
+
+## FA + OA vs. FTC + FV-PTC + OTC + NIFTP
+
+```{r}
+# Format data
+dat_backup <- dat3
+
+dat3$diag <- NA
+
+dat3$diag[dat3$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma")] <- 'benign'
+
+dat3$diag[dat3$Diagnosis %in% c("Follicular_thyroid_cancer", "Follicular_variant_papillary",  
+                                "NIFTP", "Oncocytic_thyroid_cancer")] <- 'malignant'
+
+dat3 <- dat3[!is.na(dat3$diag), ]
+
+dat3$ttw <- NA
+dat3$ttw[dat3$H_AP > dat3$W_Transverse] <- "taller_than_wide"
+dat3$ttw[dat3$H_AP <= dat3$W_Transverse] <- "wider_than_tall"
+
+table(dat3[, c("diag", "ttw")])
+chisq.test(dat3$diag, dat3$ttw) # NOT SIGNIFICANT!!!!
+
+dat3$predicted <- NA
+dat3$predicted[dat3$ttw == "wider_than_tall"] <- "benign"
+dat3$predicted[dat3$ttw == "taller_than_wide"] <- "malignant"
+
+# Create vectors
+expected_value <- factor(dat3$diag, levels = c("malignant", "benign"))
+predicted_value <- factor(dat3$predicted, levels = c("malignant", "benign"))
+
+# Create confusion matrix
+confusionMatrix(data=predicted_value, reference = expected_value)
+```
+
+## FA + OA vs. FTC + FV-PTC + OTC
+
+```{r}
+# Format data
+dat4 <- dat3[dat3$Diagnosis != "NIFTP", ]
+
+dat4$diag <- NA
+
+dat4$diag[dat4$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma")] <- 'benign'
+dat4$diag[dat4$Diagnosis %in% c("Follicular_thyroid_cancer", "Follicular_variant_papillary",  
+                                "NIFTP", "Oncocytic_thyroid_cancer")] <- 'malignant'
+dat4 <- dat4[!is.na(dat4$diag), ]
+
+
+dat4$ttw <- NA
+
+dat4$ttw[dat4$H_AP > dat4$W_Transverse] <- "taller_than_wide"
+dat4$ttw[dat4$H_AP <= dat4$W_Transverse] <- "wider_than_tall"
+
+table(dat4[, c("diag", "ttw")])
+chisq.test(dat4$diag, dat4$ttw) 
+
+dat4$predicted <- NA
+dat4$predicted[dat4$ttw == "wider_than_tall"] <- "benign"
+dat4$predicted[dat4$ttw == "taller_than_wide"] <- "malignant"
+
+# Create vectors
+expected_value <- factor(dat4$diag, levels = c("malignant", "benign"))
+predicted_value <- factor(dat4$predicted, levels = c("malignant", "benign"))
+
+# Create confusion matrix
+confusionMatrix(data=predicted_value, reference = expected_value)
+```
+
+## FA vs. FTC
+
+```{r}
+dat5 <- dat4[dat4$Diagnosis %in% c("Follicular_adenoma", "Follicular_thyroid_cancer"), ]
+table(dat5[, c("diag", "ttw")])
+chisq.test(dat5$diag, dat5$ttw)
+```
+
+## OA vs. OTC
+
+```{r}
+dat6 <- dat4[dat4$Diagnosis %in% c("Oncocytic_adenoma", "Oncocytic_thyroid_cancer"), ]
+table(dat6[, c("diag", "ttw")])
+chisq.test(dat6$diag, dat6$ttw)
+```
+
+## FA + OA + AN + HN vs. FTC + FVP + NIFTP + OCT + PTC
+
+```{r}
+# Foramt data
+dat7 <- dat_backup
+table(dat7$Diagnosis)
+
+dat7$diag <- NA
+
+dat7$diag[dat7$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma", 
+                                "Adenomatoid_nodule", "Hyperplastic_nodule")] <- 'benign'
+dat7$diag[dat7$Diagnosis %in% c("Follicular_thyroid_cancer", "Follicular_variant_papillary",  
+                                "NIFTP", "Oncocytic_thyroid_cancer", "Papillary_thyroid_cancer")] <- 'malignant'
+dat7 <- dat7[!is.na(dat7$diag), ]
+
+dat7$ttw <- NA
+
+dat7$ttw[dat7$H_AP > dat7$W_Transverse] <- "taller_than_wide"
+dat7$ttw[dat7$H_AP <= dat7$W_Transverse] <- "wider_than_tall"
+
+
+table(dat7[, c("diag", "ttw")])
+chisq.test(dat7$diag, dat7$ttw)
+
+dat7$predicted <- NA
+dat7$predicted[dat7$ttw == "wider_than_tall"] <- "benign"
+dat7$predicted[dat7$ttw == "taller_than_wide"] <- "malignant"
+
+# Crete vectors
+expected_value <- factor(dat7$diag, levels = c("malignant", "benign"))
+predicted_value <- factor(dat7$predicted, levels = c("malignant", "benign"))
+
+# Create confusion matrix
+confusionMatrix(data=predicted_value, reference = expected_value)
+```
+
+## PTC vs. AN + HN
+
+```{r}
+# Format data
+dat8 <- dat7[dat7$Diagnosis %in% c("Adenomatoid_nodule", "Hyperplastic_nodule", "Papillary_thyroid_cancer"), ]
+
+table(dat8[, c("diag", "ttw")])
+chisq.test(dat8$diag, dat8$ttw) 
+
+# Create vectors
+expected_value <- factor(dat8$diag, levels = c("malignant", "benign"))
+predicted_value <- factor(dat8$predicted, levels = c("malignant", "benign"))
+
+# Create confusion matrix
+confusionMatrix(data=predicted_value, reference = expected_value)
+```
+
+## FA + OA vs. FTC + OTC
+
+```{r}
+# Format data
+dat9 <- dat_backup
+dat9 <- dat9[dat9$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma", "Follicular_thyroid_cancer", "Oncocytic_thyroid_cancer"), ]
+dat9$diag <- NA
+
+dat9$diag[dat9$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma")] <- 'benign'
+dat9$diag[dat9$Diagnosis %in% c("Follicular_thyroid_cancer", "Oncocytic_thyroid_cancer")] <- 'malignant'
+dat9 <- dat9[!is.na(dat9$diag), ]
+
+dat9$ttw <- NA
+
+dat9$ttw[dat9$H_AP > dat9$W_Transverse] <- "taller_than_wide"
+dat9$ttw[dat9$H_AP <= dat9$W_Transverse] <- "wider_than_tall"
+
+table(dat9[, c("diag", "ttw")])
+chisq.test(dat9$diag, dat9$ttw) 
+
+dat9$predicted <- NA
+dat9$predicted[dat9$ttw == "wider_than_tall"] <- "benign"
+dat9$predicted[dat9$ttw == "taller_than_wide"] <- "malignant"
+
+# Create vectors
+expected_value <- factor(dat9$diag, levels = c("malignant", "benign"))
+predicted_value <- factor(dat9$predicted, levels = c("malignant", "benign"))
+
+# Create confusion matrix
+confusionMatrix(data=predicted_value, reference = expected_value)
+```
+
+## PTC vs. FA + OA + FTC + OTC + NIFTP + FVPTC
+
+```{r}
+# Format data
+dat10 <- dat_backup
+dat10 <- dat10[dat10$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma", "Follicular_thyroid_cancer", "Oncocytic_thyroid_cancer",
+                                      "Follicular_variant_papillary", "NIFTP", "Papillary_thyroid_cancer"), ]
+dat10$diag <- NA
+
+dat10$diag[dat10$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma", "Follicular_thyroid_cancer", "Oncocytic_thyroid_cancer",
+                                  "Follicular_variant_papillary", "NIFTP")] <- 'nonPTC_neoplasms'
+dat10$diag[dat10$Diagnosis %in% c("Papillary_thyroid_cancer")] <- 'PTC'
+dat10 <- dat10[!is.na(dat10$diag), ]
+
+dat10$ttw <- NA
+
+dat10$ttw[dat10$H_AP > dat10$W_Transverse] <- "taller_than_wide"
+dat10$ttw[dat10$H_AP <= dat10$W_Transverse] <- "wider_than_tall"
+
+table(dat10[, c("diag", "ttw")])
+chisq.test(dat10$diag, dat10$ttw) 
+
+dat10$predicted <- NA
+dat10$predicted[dat10$ttw == "wider_than_tall"] <- "nonPTC_neoplasms"
+dat10$predicted[dat10$ttw == "taller_than_wide"] <- "PTC"
+
+# Create vectors
+expected_value <- factor(dat10$diag, levels = c("PTC", "nonPTC_neoplasms"))
+predicted_value <- factor(dat10$predicted, levels = c("PTC", "nonPTC_neoplasms"))
+
+# Create confusion matrix
+confusionMatrix(data=predicted_value, reference = expected_value)
+```
+
+## HN + AN vs. FA + OA + FTC + NIFTP + FVP + OTC
+
+```{r}
+# Format data
+dat10 <- dat_backup
+table(dat10$Diagnosis)
+
+dat10$diag <- NA
+
+dat10$diag[dat10$Diagnosis %in% c("Hyperplastic_nodule", "Adenomatoid_nodule")] <- 'non_neoplastic'
+dat10$diag[dat10$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma", "Follicular_thyroid_cancer", 
+                                  "Follicular_variant_papillary",  
+                                  "NIFTP", "Oncocytic_thyroid_cancer")] <- 'neoplastic'
+dat10 <- dat10[!is.na(dat10$diag), ]
+
+dat10$ttw <- NA
+
+dat10$ttw[dat10$H_AP > dat10$W_Transverse] <- "taller_than_wide"
+dat10$ttw[dat10$H_AP <= dat10$W_Transverse] <- "wider_than_tall"
+
+table(dat10[, c("diag", "ttw")])
+chisq.test(dat10$diag, dat10$ttw) # NOT SIGNIFICANT!!!!
+
+dat10$predicted <- NA
+dat10$predicted[dat10$ttw == "wider_than_tall"] <- "benign"
+dat10$predicted[dat10$ttw == "taller_than_wide"] <- "malignant"
+
+# Convert to proper comparison
+dat10$diag <- ifelse(dat10$diag == "neoplastic",
+                     "malignant",
+                     dat10$diag)
+dat10$diag <- ifelse(dat10$diag == "non_neoplastic",
+                     "benign",
+                     dat10$diag)
+
+# Create vectors
+expected_value <- factor(dat10$diag, levels = c("malignant", "benign"))
+predicted_value <- factor(dat10$predicted, levels = c("malignant", "benign"))
+
+# Create confusion matrix
+confusionMatrix(data=predicted_value, reference = expected_value)
+```
+
+## PTC vs. FV-PTC
+
+```{r}
+# Format data
+dat10 <- dat_backup
+table(dat10$Diagnosis)
+
+dat10$diag <- NA
+
+dat10$diag[dat10$Diagnosis %in% c("Papillary_thyroid_cancer")] <- 'PTC'
+dat10$diag[dat10$Diagnosis %in% c("Follicular_variant_papillary")] <- 'FV-PTC'
+dat10 <- dat10[!is.na(dat10$diag), ]
+
+dat10$ttw <- NA
+
+dat10$ttw[dat10$H_AP > dat10$W_Transverse] <- "taller_than_wide"
+dat10$ttw[dat10$H_AP <= dat10$W_Transverse] <- "wider_than_tall"
+
+table(dat10[, c("diag", "ttw")])
+chisq.test(dat10$diag, dat10$ttw) # NOT SIGNIFICANT!!!!
+
+dat10$predicted <- NA
+dat10$predicted[dat10$ttw == "wider_than_tall"] <- "benign"
+dat10$predicted[dat10$ttw == "taller_than_wide"] <- "malignant"
+
+# Convert to proper comparison
+dat10$diag <- ifelse(dat10$diag == "PTC",
+                     "malignant",
+                     dat10$diag)
+dat10$diag <- ifelse(dat10$diag == "FV-PTC",
+                     "benign",
+                     dat10$diag)
+
+# Create vectors
+expected_value <- factor(dat10$diag, levels = c("malignant", "benign"))
+predicted_value <- factor(dat10$predicted, levels = c("malignant", "benign"))
+
+# Create confusion matrix
+confusionMatrix(data=predicted_value, reference = expected_value)
+```
+
+## Regression to investigate significance of nodule size
+
+```{r}
+# Format data
+dat11 <- dat_backup
+
+dat11$diag <- NA
+
+dat11$diag[dat11$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma")] <- 'benign'
+dat11$diag[dat11$Diagnosis %in% c("Follicular_thyroid_cancer", "Follicular_variant_papillary",  
+                                  "NIFTP", "Oncocytic_thyroid_cancer")] <- 'malignant'
+dat11 <- dat11[!is.na(dat11$diag), ]
+
+dat11$ttw <- NA
+
+dat11$ttw[dat11$H_AP > dat11$W_Transverse] <- 1
+dat11$ttw[dat11$H_AP <= dat11$W_Transverse] <- 0
+
+# Max dimension
+dat11$maxNoduleSize <- apply(dat11[, c("H_AP", "W_Transverse", "L_Longitudinal")], max, MARGIN=1)
+dat11$diag <- as.numeric(as.factor(dat11$Diagnosis))
+
+# Regression
+model <- glm(formula = ttw ~ diag + maxNoduleSize + diag * maxNoduleSize, 
+    family = "binomial", data = dat11)
+
+summary(model)
+```

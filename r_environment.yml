@@ -1,0 +1,8 @@
+name: ttw
+channels:
+  - conda-forge
+  - r
+dependencies:
+  - r-base=4.1.*
+  - r-devtools
+  - pandoc
