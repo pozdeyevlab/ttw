@@ -37,7 +37,7 @@ This markdown file replicates the analysis published in "Taller-than-wide sonogr
 Abbreviations:
 Follicular adenoma: FA
 Follicular thyroid cancer: FTC 
-Follicular variant papillary: FVP
+Follicular variant papillary: FV-PCT
 NIFTP: NIFT
 Oncocytic adenoma: OA
 Oncocytic thyroid cancer: OTC
