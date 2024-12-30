@@ -3,28 +3,29 @@ title: "taller_than_wider"
 output: html_document
 date: "`r Sys.Date()`"
 params:
-    input: ""
+    input: "TTW_publication_data.tsv"
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-if (!requireNamespace("readxl", quietly = TRUE))
-  install.packages("readxl")
-if (!requireNamespace("caret", quietly = TRUE))
-  install.packages("caret")
-if (!requireNamespace("data.table", quietly = TRUE))
-  install.packages("pracma")
-if (!requireNamespace("pracma", quietly = TRUE))
-  install.packages("pROC")
-if (!requireNamespace("yardstick", quietly = TRUE))
-  install.packages("yardstick")
 
-library(readxl)
+if (!requireNamespace("caret", quietly = TRUE))
+  install.packages("caret", repos='http://cran.us.r-project.org')
+if (!requireNamespace("data.table", quietly = TRUE))
+  install.packages("data.table", repos='http://cran.us.r-project.org')
+if (!requireNamespace("pracma", quietly = TRUE))
+  install.packages("pracma", repos='http://cran.us.r-project.org')
+if (!requireNamespace("pROC", quietly = TRUE))
+  install.packages("pROC", repos='http://cran.us.r-project.org')
+if (!requireNamespace("epiR", quietly = TRUE))
+  install.packages("epiR", repos='http://cran.us.r-project.org')
+
 library(caret)
 library(data.table)
 library(pracma)
 library(pROC)
-library(yardstick)
+library(epiR)
+
 ```
 
 ```{r color, results='markup'}
@@ -85,6 +86,25 @@ for (i in c("Follicular_adenoma", "Follicular_thyroid_cancer", "Follicular_varia
 print(summary)
 ```
 
+### Calculating sphericity index
+
+Sphericity index is defined as si <- nthroot(dims[1]^2/(dims[2]*dims[3]) ,3)
+where dims is a data frame with three nodule dimensions.
+
+```{r}
+
+sphericity_index <- function(dims){ 
+  dims <- sort(as.numeric(dims))
+  si <- nthroot(dims[1]^2/(dims[2]*dims[3]) ,3)
+  return(si)
+}
+
+# adding sphericity index
+dimentions <- dat3[, c("H_AP", "W_Transverse", "L_Longitudinal")]
+dat3$si <- apply(dimentions, MARGIN = 1, sphericity_index)
+
+```
+
 ## FA + OA vs. FTC + FV-PTC + OTC + NIFTP
 
 ```{r}
@@ -104,8 +124,12 @@ dat3$ttw <- NA
 dat3$ttw[dat3$H_AP > dat3$W_Transverse] <- "taller_than_wide"
 dat3$ttw[dat3$H_AP <= dat3$W_Transverse] <- "wider_than_tall"
 
+# contingency table
+ct <- table(dat3[, c("diag", "ttw")])
 table(dat3[, c("diag", "ttw")])
-chisq.test(dat3$diag, dat3$ttw) # NOT SIGNIFICANT!!!!
+
+#chi-squared test
+chisq.test(dat3$diag, dat3$ttw) # 0.08; not significant
 
 dat3$predicted <- NA
 dat3$predicted[dat3$ttw == "wider_than_tall"] <- "benign"
@@ -117,109 +141,229 @@ predicted_value <- factor(dat3$predicted, levels = c("malignant", "benign"))
 
 # Create confusion matrix
 confusionMatrix(data=predicted_value, reference = expected_value)
+
+# using epiR to calculate exact binomial confidence limits for test sensitivity, specif icity, and positive and negative predictive value
+ct_epi <- as.table(matrix(c(ct["malignant", "taller_than_wide"], 
+                            ct["benign", "taller_than_wide"],
+                            ct["malignant", "wider_than_tall"],
+                            ct["benign", "wider_than_tall"]), nrow = 2, byrow = TRUE))
+ct_epi
+epi.tests(ct_epi, method = "exact", digits = 3, conf.level = 0.95)
+
+# comparing sphericity index
+
+#first testing if SI is normally distributed
+hist(dat_backup$si) # not normal - left skewed
+shapiro.test(dat_backup$si) # p-value = 4.158e-12, therefore will use non-parametric Wilcoxon test
+
+wilcox.test(dat3$si[dat3$diag == "benign"], dat3$si[dat3$diag == "malignant"])
+
+
+quantile(dat3$si[dat3$diag == "benign"], probs = c(0,0.25,0.5,0.75,1))
+quantile(dat3$si[dat3$diag == "malignant"], probs = c(0,0.25,0.5,0.75,1))
+
+# calculating AUROC
+dat3$diag <- factor(dat3$diag, levels = c("benign", "malignant"))
+
+roc <- roc(response = dat3$diag,
+           predictor = dat3$si,
+           levels = c('benign', 'malignant'))
+roc
+ci.auc(roc)
+
 ```
 
-## FA + OA vs. FTC + FV-PTC + OTC
+## TTW-1.2. FA + OA vs. FTC + FV-PTC + OTC + NIFTP
 
 ```{r}
 # Format data
-dat4 <- dat3[dat3$Diagnosis != "NIFTP", ]
+dat3_ttw1_2 <- dat_backup
 
-dat4$diag <- NA
+dat3_ttw1_2$diag <- NA
 
-dat4$diag[dat4$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma")] <- 'benign'
-dat4$diag[dat4$Diagnosis %in% c("Follicular_thyroid_cancer", "Follicular_variant_papillary",  
+dat3_ttw1_2$diag[dat3_ttw1_2$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma")] <- 'benign'
+
+dat3_ttw1_2$diag[dat3_ttw1_2$Diagnosis %in% c("Follicular_thyroid_cancer", "Follicular_variant_papillary",  
                                 "NIFTP", "Oncocytic_thyroid_cancer")] <- 'malignant'
-dat4 <- dat4[!is.na(dat4$diag), ]
 
+dat3_ttw1_2 <- dat3_ttw1_2[!is.na(dat3_ttw1_2$diag), ]
 
-dat4$ttw <- NA
+dat3_ttw1_2$ttw <- NA
+dat3_ttw1_2$ttw[dat3_ttw1_2$H_AP/dat3_ttw1_2$W_Transverse >= 1.2] <- "taller_than_wide"
+dat3_ttw1_2$ttw[dat3_ttw1_2$H_AP/dat3_ttw1_2$W_Transverse < 1.2] <- "wider_than_tall"
 
-dat4$ttw[dat4$H_AP > dat4$W_Transverse] <- "taller_than_wide"
-dat4$ttw[dat4$H_AP <= dat4$W_Transverse] <- "wider_than_tall"
+# contingency table
+ct <- table(dat3_ttw1_2[, c("diag", "ttw")])
+table(dat3_ttw1_2[, c("diag", "ttw")])
 
-table(dat4[, c("diag", "ttw")])
-chisq.test(dat4$diag, dat4$ttw) 
+#chi-squared test
+chisq.test(dat3_ttw1_2$diag, dat3_ttw1_2$ttw)
 
-dat4$predicted <- NA
-dat4$predicted[dat4$ttw == "wider_than_tall"] <- "benign"
-dat4$predicted[dat4$ttw == "taller_than_wide"] <- "malignant"
+dat3_ttw1_2$predicted <- NA
+dat3_ttw1_2$predicted[dat3_ttw1_2$ttw == "wider_than_tall"] <- "benign"
+dat3_ttw1_2$predicted[dat3_ttw1_2$ttw == "taller_than_wide"] <- "malignant"
 
 # Create vectors
-expected_value <- factor(dat4$diag, levels = c("malignant", "benign"))
-predicted_value <- factor(dat4$predicted, levels = c("malignant", "benign"))
+expected_value <- factor(dat3_ttw1_2$diag, levels = c("malignant", "benign"))
+predicted_value <- factor(dat3_ttw1_2$predicted, levels = c("malignant", "benign"))
 
 # Create confusion matrix
 confusionMatrix(data=predicted_value, reference = expected_value)
+
+# using epiR to calculate exact binomial confidence limits for test sensitivity, specif icity, and positive and negative predictive value
+ct_epi <- as.table(matrix(c(ct["malignant", "taller_than_wide"], 
+                            ct["benign", "taller_than_wide"],
+                            ct["malignant", "wider_than_tall"],
+                            ct["benign", "wider_than_tall"]), nrow = 2, byrow = TRUE))
+epi.tests(ct_epi, method = "exact", digits = 3, conf.level = 0.95)
+
 ```
 
-## FA vs. FTC
+## FA vs. FTC incluing TTW 1.2 ratio
 
 ```{r}
-dat5 <- dat4[dat4$Diagnosis %in% c("Follicular_adenoma", "Follicular_thyroid_cancer"), ]
+dat5 <- dat3[dat3$Diagnosis %in% c("Follicular_adenoma", "Follicular_thyroid_cancer"), ]
 table(dat5[, c("diag", "ttw")])
 chisq.test(dat5$diag, dat5$ttw)
-```
 
+# comparing sphericity index
+wilcox.test(dat5$si[dat5$diag == "benign"], dat5$si[dat5$diag == "malignant"])
+
+quantile(dat5$si[dat5$diag == "benign"], probs = c(0,0.25,0.5,0.75,1))
+quantile(dat5$si[dat5$diag == "malignant"], probs = c(0,0.25,0.5,0.75,1))
+
+# calculating AUROC
+dat5$diag <- factor(dat5$diag, levels = c("benign", "malignant"))
+
+roc <- roc(response = dat5$diag,
+           predictor = dat5$si,
+           levels = c('benign', 'malignant'))
+roc
+ci.auc(roc)
+
+
+# testing 1.2 TTW ratio
+dat5_ttw1_2 <- dat5
+dat5_ttw1_2$ttw <- NA
+dat5_ttw1_2$ttw[dat5_ttw1_2$H_AP/dat5_ttw1_2$W_Transverse >= 1.2] <- "taller_than_wide"
+dat5_ttw1_2$ttw[dat5_ttw1_2$H_AP/dat5_ttw1_2$W_Transverse < 1.2] <- "wider_than_tall"
+
+table(dat5_ttw1_2[, c("diag", "ttw")])
+chisq.test(dat5_ttw1_2$diag, dat5_ttw1_2$ttw)
+
+```
 ## OA vs. OTC
 
 ```{r}
-dat6 <- dat4[dat4$Diagnosis %in% c("Oncocytic_adenoma", "Oncocytic_thyroid_cancer"), ]
+dat6 <- dat3[dat3$Diagnosis %in% c("Oncocytic_adenoma", "Oncocytic_thyroid_cancer"), ]
 table(dat6[, c("diag", "ttw")])
 chisq.test(dat6$diag, dat6$ttw)
+
+# comparing sphericity index
+wilcox.test(dat6$si[dat6$diag == "benign"], dat6$si[dat6$diag == "malignant"])
+
+quantile(dat6$si[dat6$diag == "benign"], probs = c(0,0.25,0.5,0.75,1))
+quantile(dat6$si[dat6$diag == "malignant"], probs = c(0,0.25,0.5,0.75,1))
+
+# calculating AUROC
+dat6$diag <- factor(dat6$diag, levels = c("benign", "malignant"))
+
+roc <- roc(response = dat6$diag,
+           predictor = dat6$si,
+           levels = c('benign', 'malignant'))
+roc
+ci.auc(roc)
+
+
+# testing 1.2 TTW ratio
+dat6_ttw1_2 <- dat6
+dat6_ttw1_2$ttw <- NA
+dat6_ttw1_2$ttw[dat6_ttw1_2$H_AP/dat6_ttw1_2$W_Transverse >= 1.2] <- "taller_than_wide"
+dat6_ttw1_2$ttw[dat6_ttw1_2$H_AP/dat6_ttw1_2$W_Transverse < 1.2] <- "wider_than_tall"
+
+table(dat6_ttw1_2[, c("diag", "ttw")])
+chisq.test(dat6_ttw1_2$diag, dat6_ttw1_2$ttw)
+
 ```
 
-## FA + OA + AN + HN vs. FTC + FVP + NIFTP + OCT + PTC
 
-```{r}
-# Foramt data
-dat7 <- dat_backup
-table(dat7$Diagnosis)
-
-dat7$diag <- NA
-
-dat7$diag[dat7$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma", 
-                                "Adenomatoid_nodule", "Hyperplastic_nodule")] <- 'benign'
-dat7$diag[dat7$Diagnosis %in% c("Follicular_thyroid_cancer", "Follicular_variant_papillary",  
-                                "NIFTP", "Oncocytic_thyroid_cancer", "Papillary_thyroid_cancer")] <- 'malignant'
-dat7 <- dat7[!is.na(dat7$diag), ]
-
-dat7$ttw <- NA
-
-dat7$ttw[dat7$H_AP > dat7$W_Transverse] <- "taller_than_wide"
-dat7$ttw[dat7$H_AP <= dat7$W_Transverse] <- "wider_than_tall"
-
-
-table(dat7[, c("diag", "ttw")])
-chisq.test(dat7$diag, dat7$ttw)
-
-dat7$predicted <- NA
-dat7$predicted[dat7$ttw == "wider_than_tall"] <- "benign"
-dat7$predicted[dat7$ttw == "taller_than_wide"] <- "malignant"
-
-# Crete vectors
-expected_value <- factor(dat7$diag, levels = c("malignant", "benign"))
-predicted_value <- factor(dat7$predicted, levels = c("malignant", "benign"))
-
-# Create confusion matrix
-confusionMatrix(data=predicted_value, reference = expected_value)
-```
 
 ## PTC vs. AN + HN
 
 ```{r}
 # Format data
-dat8 <- dat7[dat7$Diagnosis %in% c("Adenomatoid_nodule", "Hyperplastic_nodule", "Papillary_thyroid_cancer"), ]
+dat8 <- dat_backup[dat_backup$Diagnosis %in% c("Adenomatoid_nodule", "Hyperplastic_nodule", "Papillary_thyroid_cancer"), ]
 
+
+dat8$diag <- NA
+
+dat8$diag[dat8$Diagnosis %in% c("Adenomatoid_nodule", "Hyperplastic_nodule")] <- 'benign'
+
+dat8$diag[dat8$Diagnosis %in% c("Papillary_thyroid_cancer")] <- 'malignant'
+
+dat8 <- dat8[!is.na(dat8$diag), ]
+
+dat8$ttw <- NA
+dat8$ttw[dat8$H_AP > dat8$W_Transverse] <- "taller_than_wide"
+dat8$ttw[dat8$H_AP <= dat8$W_Transverse] <- "wider_than_tall"
+
+# contingency table
+ct <- table(dat8[, c("diag", "ttw")])
 table(dat8[, c("diag", "ttw")])
+
 chisq.test(dat8$diag, dat8$ttw) 
+
+# confusion matrix
+dat8$predicted <- NA
+dat8$predicted[dat8$ttw == "wider_than_tall"] <- "benign"
+dat8$predicted[dat8$ttw == "taller_than_wide"] <- "malignant"
 
 # Create vectors
 expected_value <- factor(dat8$diag, levels = c("malignant", "benign"))
 predicted_value <- factor(dat8$predicted, levels = c("malignant", "benign"))
 
+
 # Create confusion matrix
 confusionMatrix(data=predicted_value, reference = expected_value)
+
+# using epiR to calculate exact binomial confidence limits for test sensitivity, specif icity, and positive and negative predictive value
+ct_epi <- as.table(matrix(c(ct["malignant", "taller_than_wide"], 
+                            ct["benign", "taller_than_wide"],
+                            ct["malignant", "wider_than_tall"],
+                            ct["benign", "wider_than_tall"]), nrow = 2, byrow = TRUE))
+ct_epi
+epi.tests(ct_epi, method = "exact", digits = 2, conf.level = 0.95)
+
+
+
+# comparing sphericity index
+wilcox.test(dat8$si[dat8$diag == "benign"], dat8$si[dat8$diag == "malignant"])
+
+quantile(dat8$si[dat8$diag == "benign"], probs = c(0,0.25,0.5,0.75,1))
+quantile(dat8$si[dat8$diag == "malignant"], probs = c(0,0.25,0.5,0.75,1))
+
+
+# calculating AUROC
+dat8$diag <- factor(dat8$diag, levels = c("benign", "malignant"))
+
+roc <- roc(response = dat8$diag,
+           predictor = dat8$si,
+           levels = c('benign', 'malignant'))
+roc
+ci.auc(roc)
+
+
+# testing 1.2 TTW ratio
+dat8_ttw1_2 <- dat8
+dat8_ttw1_2$ttw <- NA
+dat8_ttw1_2$ttw[dat8_ttw1_2$H_AP/dat8_ttw1_2$W_Transverse >= 1.2] <- "taller_than_wide"
+dat8_ttw1_2$ttw[dat8_ttw1_2$H_AP/dat8_ttw1_2$W_Transverse < 1.2] <- "wider_than_tall"
+
+table(dat8_ttw1_2[, c("diag", "ttw")])
+chisq.test(dat8_ttw1_2$diag, dat8_ttw1_2$ttw)
+
+
+
 ```
 
 ## FA + OA vs. FTC + OTC
@@ -242,6 +386,11 @@ dat9$ttw[dat9$H_AP <= dat9$W_Transverse] <- "wider_than_tall"
 table(dat9[, c("diag", "ttw")])
 chisq.test(dat9$diag, dat9$ttw) 
 
+# contingency table
+ct <- table(dat9[, c("diag", "ttw")])
+table(dat9[, c("diag", "ttw")])
+
+
 dat9$predicted <- NA
 dat9$predicted[dat9$ttw == "wider_than_tall"] <- "benign"
 dat9$predicted[dat9$ttw == "taller_than_wide"] <- "malignant"
@@ -250,45 +399,51 @@ dat9$predicted[dat9$ttw == "taller_than_wide"] <- "malignant"
 expected_value <- factor(dat9$diag, levels = c("malignant", "benign"))
 predicted_value <- factor(dat9$predicted, levels = c("malignant", "benign"))
 
-# Create confusion matrix
-confusionMatrix(data=predicted_value, reference = expected_value)
-```
-
-## PTC vs. FA + OA + FTC + OTC + NIFTP + FVPTC
-
-```{r}
-# Format data
-dat10 <- dat_backup
-dat10 <- dat10[dat10$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma", "Follicular_thyroid_cancer", "Oncocytic_thyroid_cancer",
-                                      "Follicular_variant_papillary", "NIFTP", "Papillary_thyroid_cancer"), ]
-dat10$diag <- NA
-
-dat10$diag[dat10$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma", "Follicular_thyroid_cancer", "Oncocytic_thyroid_cancer",
-                                  "Follicular_variant_papillary", "NIFTP")] <- 'nonPTC_neoplasms'
-dat10$diag[dat10$Diagnosis %in% c("Papillary_thyroid_cancer")] <- 'PTC'
-dat10 <- dat10[!is.na(dat10$diag), ]
-
-dat10$ttw <- NA
-
-dat10$ttw[dat10$H_AP > dat10$W_Transverse] <- "taller_than_wide"
-dat10$ttw[dat10$H_AP <= dat10$W_Transverse] <- "wider_than_tall"
-
-table(dat10[, c("diag", "ttw")])
-chisq.test(dat10$diag, dat10$ttw) 
-
-dat10$predicted <- NA
-dat10$predicted[dat10$ttw == "wider_than_tall"] <- "nonPTC_neoplasms"
-dat10$predicted[dat10$ttw == "taller_than_wide"] <- "PTC"
-
-# Create vectors
-expected_value <- factor(dat10$diag, levels = c("PTC", "nonPTC_neoplasms"))
-predicted_value <- factor(dat10$predicted, levels = c("PTC", "nonPTC_neoplasms"))
 
 # Create confusion matrix
 confusionMatrix(data=predicted_value, reference = expected_value)
+
+# using epiR to calculate exact binomial confidence limits for test sensitivity, specif icity, and positive and negative predictive value
+ct_epi <- as.table(matrix(c(ct["malignant", "taller_than_wide"], 
+                            ct["benign", "taller_than_wide"],
+                            ct["malignant", "wider_than_tall"],
+                            ct["benign", "wider_than_tall"]), nrow = 2, byrow = TRUE))
+ct_epi
+epi.tests(ct_epi, method = "exact", digits = 2, conf.level = 0.95)
+
+
+
+# comparing sphericity index
+wilcox.test(dat9$si[dat9$diag == "benign"], dat9$si[dat9$diag == "malignant"])
+
+quantile(dat9$si[dat9$diag == "benign"], probs = c(0,0.25,0.5,0.75,1))
+quantile(dat9$si[dat9$diag == "malignant"], probs = c(0,0.25,0.5,0.75,1))
+
+
+# calculating AUROC
+dat9$diag <- factor(dat9$diag, levels = c("benign", "malignant"))
+
+roc <- roc(response = dat9$diag,
+           predictor = dat9$si,
+           levels = c('benign', 'malignant'))
+roc
+ci.auc(roc)
+
+
+# testing 1.2 TTW ratio
+dat9_ttw1_2 <- dat9
+dat9_ttw1_2$ttw <- NA
+dat9_ttw1_2$ttw[dat9_ttw1_2$H_AP/dat9_ttw1_2$W_Transverse >= 1.2] <- "taller_than_wide"
+dat9_ttw1_2$ttw[dat9_ttw1_2$H_AP/dat9_ttw1_2$W_Transverse < 1.2] <- "wider_than_tall"
+
+table(dat9_ttw1_2[, c("diag", "ttw")])
+chisq.test(dat9_ttw1_2$diag, dat9_ttw1_2$ttw)
+
+
 ```
 
-## HN + AN vs. FA + OA + FTC + NIFTP + FVP + OTC
+
+## HN + AN vs. FA + OA + FTC + NIFTP + FVP + OTC + PTC (non_neoplastic vs. neoplastic)
 
 ```{r}
 # Format data
@@ -300,7 +455,7 @@ dat10$diag <- NA
 dat10$diag[dat10$Diagnosis %in% c("Hyperplastic_nodule", "Adenomatoid_nodule")] <- 'non_neoplastic'
 dat10$diag[dat10$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma", "Follicular_thyroid_cancer", 
                                   "Follicular_variant_papillary",  
-                                  "NIFTP", "Oncocytic_thyroid_cancer")] <- 'neoplastic'
+                                  "NIFTP", "Oncocytic_thyroid_cancer", "Papillary_thyroid_cancer")] <- 'neoplastic'
 dat10 <- dat10[!is.na(dat10$diag), ]
 
 dat10$ttw <- NA
@@ -309,7 +464,11 @@ dat10$ttw[dat10$H_AP > dat10$W_Transverse] <- "taller_than_wide"
 dat10$ttw[dat10$H_AP <= dat10$W_Transverse] <- "wider_than_tall"
 
 table(dat10[, c("diag", "ttw")])
-chisq.test(dat10$diag, dat10$ttw) # NOT SIGNIFICANT!!!!
+chisq.test(dat10$diag, dat10$ttw)
+
+# contingency table
+ct <- table(dat10[, c("diag", "ttw")])
+table(dat10[, c("diag", "ttw")])
 
 dat10$predicted <- NA
 dat10$predicted[dat10$ttw == "wider_than_tall"] <- "benign"
@@ -329,74 +488,122 @@ predicted_value <- factor(dat10$predicted, levels = c("malignant", "benign"))
 
 # Create confusion matrix
 confusionMatrix(data=predicted_value, reference = expected_value)
+
+# using epiR to calculate exact binomial confidence limits for test sensitivity, specif icity, and positive and negative predictive value
+ct_epi <- as.table(matrix(c(ct["neoplastic", "taller_than_wide"], 
+                            ct["non_neoplastic", "taller_than_wide"],
+                            ct["neoplastic", "wider_than_tall"],
+                            ct["non_neoplastic", "wider_than_tall"]), nrow = 2, byrow = TRUE))
+ct_epi
+epi.tests(ct_epi, method = "exact", digits = 3, conf.level = 0.95)
+
+# comparing sphericity index
+wilcox.test(dat10$si[dat10$diag == "benign"], dat10$si[dat10$diag == "malignant"])
+
+quantile(dat10$si[dat10$diag == "benign"], probs = c(0,0.25,0.5,0.75,1))
+quantile(dat10$si[dat10$diag == "malignant"], probs = c(0,0.25,0.5,0.75,1))
+
+
+# calculating AUROC
+dat10$diag <- factor(dat10$diag, levels = c("benign", "malignant"))
+
+roc <- roc(response = dat10$diag,
+           predictor = dat10$si,
+           levels = c('benign', 'malignant'))
+roc
+ci.auc(roc)
+
+
+
+# testing 1.2 TTW ratio
+dat10_ttw1_2 <- dat10
+dat10_ttw1_2$ttw <- NA
+dat10_ttw1_2$ttw[dat10_ttw1_2$H_AP/dat10_ttw1_2$W_Transverse >= 1.2] <- "taller_than_wide"
+dat10_ttw1_2$ttw[dat10_ttw1_2$H_AP/dat10_ttw1_2$W_Transverse < 1.2] <- "wider_than_tall"
+
+table(dat10_ttw1_2[, c("diag", "ttw")])
+chisq.test(dat10_ttw1_2$diag, dat10_ttw1_2$ttw)
+
+
+
+
+
 ```
 
-## PTC vs. FV-PTC
 
-```{r}
-# Format data
-dat10 <- dat_backup
-table(dat10$Diagnosis)
-
-dat10$diag <- NA
-
-dat10$diag[dat10$Diagnosis %in% c("Papillary_thyroid_cancer")] <- 'PTC'
-dat10$diag[dat10$Diagnosis %in% c("Follicular_variant_papillary")] <- 'FV-PTC'
-dat10 <- dat10[!is.na(dat10$diag), ]
-
-dat10$ttw <- NA
-
-dat10$ttw[dat10$H_AP > dat10$W_Transverse] <- "taller_than_wide"
-dat10$ttw[dat10$H_AP <= dat10$W_Transverse] <- "wider_than_tall"
-
-table(dat10[, c("diag", "ttw")])
-chisq.test(dat10$diag, dat10$ttw) # NOT SIGNIFICANT!!!!
-
-dat10$predicted <- NA
-dat10$predicted[dat10$ttw == "wider_than_tall"] <- "benign"
-dat10$predicted[dat10$ttw == "taller_than_wide"] <- "malignant"
-
-# Convert to proper comparison
-dat10$diag <- ifelse(dat10$diag == "PTC",
-                     "malignant",
-                     dat10$diag)
-dat10$diag <- ifelse(dat10$diag == "FV-PTC",
-                     "benign",
-                     dat10$diag)
-
-# Create vectors
-expected_value <- factor(dat10$diag, levels = c("malignant", "benign"))
-predicted_value <- factor(dat10$predicted, levels = c("malignant", "benign"))
-
-# Create confusion matrix
-confusionMatrix(data=predicted_value, reference = expected_value)
-```
-
-## Regression to investigate significance of nodule size
+## HN + AN + FA + OA vs. FTC + NIFTP + FVP + OTC + PTC (benign vs. malignant)
 
 ```{r}
 # Format data
 dat11 <- dat_backup
+table(dat11$Diagnosis)
 
 dat11$diag <- NA
 
-dat11$diag[dat11$Diagnosis %in% c("Follicular_adenoma", "Oncocytic_adenoma")] <- 'benign'
+dat11$diag[dat11$Diagnosis %in% c("Hyperplastic_nodule", "Adenomatoid_nodule", "Follicular_adenoma", "Oncocytic_adenoma")] <- 'benign'
 dat11$diag[dat11$Diagnosis %in% c("Follicular_thyroid_cancer", "Follicular_variant_papillary",  
-                                  "NIFTP", "Oncocytic_thyroid_cancer")] <- 'malignant'
+                                  "NIFTP", "Oncocytic_thyroid_cancer", "Papillary_thyroid_cancer")] <- 'malignant'
 dat11 <- dat11[!is.na(dat11$diag), ]
 
 dat11$ttw <- NA
 
-dat11$ttw[dat11$H_AP > dat11$W_Transverse] <- 1
-dat11$ttw[dat11$H_AP <= dat11$W_Transverse] <- 0
+dat11$ttw[dat11$H_AP > dat11$W_Transverse] <- "taller_than_wide"
+dat11$ttw[dat11$H_AP <= dat11$W_Transverse] <- "wider_than_tall"
 
-# Max dimension
-dat11$maxNoduleSize <- apply(dat11[, c("H_AP", "W_Transverse", "L_Longitudinal")], max, MARGIN=1)
-dat11$diag <- as.numeric(as.factor(dat11$Diagnosis))
+table(dat11[, c("diag", "ttw")])
+chisq.test(dat11$diag, dat11$ttw)
 
-# Regression
-model <- glm(formula = ttw ~ diag + maxNoduleSize + diag * maxNoduleSize, 
-    family = "binomial", data = dat11)
+# contingency table
+ct <- table(dat11[, c("diag", "ttw")])
+table(dat11[, c("diag", "ttw")])
 
-summary(model)
+dat11$predicted <- NA
+dat11$predicted[dat11$ttw == "wider_than_tall"] <- "benign"
+dat11$predicted[dat11$ttw == "taller_than_wide"] <- "malignant"
+
+# Create vectors
+expected_value <- factor(dat11$diag, levels = c("malignant", "benign"))
+predicted_value <- factor(dat11$predicted, levels = c("malignant", "benign"))
+
+# Create confusion matrix
+confusionMatrix(data=predicted_value, reference = expected_value)
+
+# using epiR to calculate exact binomial confidence limits for test sensitivity, specif icity, and positive and negative predictive value
+ct_epi <- as.table(matrix(c(ct["malignant", "taller_than_wide"], 
+                            ct["benign", "taller_than_wide"],
+                            ct["malignant", "wider_than_tall"],
+                            ct["benign", "wider_than_tall"]), nrow = 2, byrow = TRUE))
+ct_epi
+epi.tests(ct_epi, method = "exact", digits = 3, conf.level = 0.95)
+
+# comparing sphericity index
+wilcox.test(dat11$si[dat11$diag == "benign"], dat11$si[dat11$diag == "malignant"])
+
+quantile(dat11$si[dat11$diag == "benign"], probs = c(0,0.25,0.5,0.75,1))
+quantile(dat11$si[dat11$diag == "malignant"], probs = c(0,0.25,0.5,0.75,1))
+
+
+# calculating AUROC
+dat11$diag <- factor(dat11$diag, levels = c("benign", "malignant"))
+
+roc <- roc(response = dat11$diag,
+           predictor = dat11$si,
+           levels = c('benign', 'malignant'))
+roc
+ci.auc(roc)
+
+
+# testing 1.2 TTW ratio
+dat11_ttw1_2 <- dat11
+dat11_ttw1_2$ttw <- NA
+dat11_ttw1_2$ttw[dat11_ttw1_2$H_AP/dat11_ttw1_2$W_Transverse >= 1.2] <- "taller_than_wide"
+dat11_ttw1_2$ttw[dat11_ttw1_2$H_AP/dat11_ttw1_2$W_Transverse < 1.2] <- "wider_than_tall"
+
+table(dat11_ttw1_2[, c("diag", "ttw")])
+chisq.test(dat11_ttw1_2$diag, dat11_ttw1_2$ttw)
+
+
+
+
+
 ```
